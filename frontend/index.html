@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Inventory Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f4f6f8; }
+    header { background: #007BFF; color: #fff; padding: 15px; text-align: center; }
+    .dashboard { display: flex; flex-wrap: wrap; justify-content: space-around; margin: 20px; }
+    .card { background: #fff; padding: 20px; border-radius: 10px; width: 250px; text-align: center; margin: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s; }
+    .card:hover { transform: translateY(-3px); }
+    .card h2 { margin: 10px 0; font-size: 28px; color: #007BFF; }
+    .card p { margin: 0; font-size: 16px; color: #555; }
+    .badge { display: inline-block; padding: 2px 6px; font-size: 12px; color: #fff; background: #dc3545; border-radius: 4px; margin-left: 5px; }
+    #form-container { margin: 20px; background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    input, button { padding: 8px; margin: 5px; }
+    button { cursor: pointer; border: none; background: #007BFF; color: #fff; border-radius: 5px; }
+    button:hover { background: #0056b3; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; border-radius: 10px; overflow: hidden; }
+    th, td { padding: 10px; border-bottom: 1px solid #ccc; text-align: center; }
+    th { background: #007BFF; color: #fff; cursor: pointer; }
+    tr.low-stock { background: #ffe5e5; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Inventory Dashboard</h1>
+  </header>
+
+  <div class="dashboard">
+    <div class="card">
+      <p>Total Items</p>
+      <h2 id="total-items">0</h2>
+    </div>
+    <div class="card">
+      <p>Total Investment</p>
+      <h2 id="total-investment">$0</h2>
+    </div>
+    <div class="card">
+      <p>Low Stock Items</p>
+      <h2 id="low-stock-count">0</h2>
+    </div>
+  </div>
+
+
+  <div id="form-container">
+    <h3 id="form-title">Add Item</h3>
+    <input type="hidden" id="item-id">
+    <input type="text" id="name" placeholder="Name">
+    <input type="number" id="quantity" placeholder="Quantity">
+    <input type="text" id="price" placeholder="Price (e.g. $10)">
+    <button id="add-btn" onclick="addItem()">Add Item</button>
+    <button id="update-btn" onclick="updateItem()" style="display:none;">Update Item</button>
+    <button onclick="resetForm()">Cancel</button>
+    <p class="error" id="form-error"></p>
+  </div>
+
+  <div style="margin: 20px;">
+    <input type="text" id="search" placeholder="Search by ID or Name">
+    <button onclick="searchItems()">Search</button>
+    <button onclick="loadItems()">Reset</button>
+
+    <table id="inventory-table">
+      <thead>
+        <tr>
+          <th onclick="sortTable(0)">ID</th>
+          <th onclick="sortTable(1)">Name</th>
+          <th onclick="sortTable(2)">Quantity</th>
+          <th onclick="sortTable(3)">Price</th>
+          <th onclick="sortTable(4)">Sold</th>
+          <th>Total Investment</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+const API_URL = "http://127.0.0.1:8000";
+const idEl = document.getElementById("item-id");
+const nameEl = document.getElementById("name");
+const quantityEl = document.getElementById("quantity");
+const priceEl = document.getElementById("price");
+
+async function loadItems() {
+  const res = await fetch(`${API_URL}/items`);
+  const data = await res.json();
+  displayItems(data);
+  loadAnalysis();
+  loadSalesChart();
+}
+
+function displayItems(items) {
+  const tbody = document.querySelector("#inventory-table tbody");
+  tbody.innerHTML = "";
+  items.sort((a,b)=>parseInt(a.quantity)<=5 && parseInt(b.quantity)>5?-1:1);
+  items.forEach(item=>{
+    const tr = document.createElement("tr");
+    let qtyDisplay = item.quantity;
+    if(parseInt(item.quantity)<=5){ tr.classList.add("low-stock"); qtyDisplay=`${item.quantity} <span class="badge">Low</span>`; }
+    tr.innerHTML=`
+      <td>${item.id}</td>
+      <td>${item.name}</td>
+      <td>${qtyDisplay}</td>
+      <td>${item.price}</td>
+      <td>${item.sold || 0}</td>
+      <td>$${item.total_investment}</td>
+      <td>
+        <button onclick='editItem(${JSON.stringify(item)})'>Edit</button>
+        <button onclick="deleteItem('${item.id}')">Delete</button>
+        <button onclick="sellItemPrompt('${item.id}')">Sell</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// CRUD Functions
+async function addItem(){
+  const name=nameEl.value.trim(), quantity=quantityEl.value.trim(), price=priceEl.value.trim();
+  const errorEl=document.getElementById("form-error"); errorEl.textContent="";
+  if(!name||!quantity||!price){ errorEl.textContent="All fields are required."; return; }
+  try{
+    const res=await fetch(`${API_URL}/items`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name,quantity,price})});
+    const result=await res.json(); if(res.status>=400) throw result;
+    resetForm(); loadItems();
+  }catch(err){ errorEl.textContent=err.detail||"Error adding item.";}
+}
+
+async function updateItem(){
+  const id=idEl.value.trim(), name=nameEl.value.trim(), quantity=quantityEl.value.trim(), price=priceEl.value.trim();
+  const errorEl=document.getElementById("form-error"); errorEl.textContent="";
+  if(!id||!name||!quantity||!price){ errorEl.textContent="All fields are required."; return; }
+  try{
+    const res=await fetch(`${API_URL}/items/${id}`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name,quantity,price})});
+    const result=await res.json(); if(res.status>=400) throw result;
+    resetForm(); loadItems();
+  }catch(err){ errorEl.textContent=err.detail||"Error updating item.";}
+}
+
+function editItem(item){
+  idEl.value=item.id; nameEl.value=item.name; quantityEl.value=item.quantity; priceEl.value=item.price;
+  document.getElementById("form-title").innerText="Update Item";
+  document.getElementById("add-btn").style.display="none";
+  document.getElementById("update-btn").style.display="inline";
+}
+async function sellItemPrompt(id){
+    const qty = prompt("Enter quantity sold:");
+    if(qty === null) return; // user cancelled
+
+    try{
+        const res = await fetch(`${API_URL}/items/${id}/sell`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({sold: qty})
+        });
+
+        const result = await res.json();
+        if(!res.ok) throw result; // backend error
+
+        alert(result.message); // success message
+        loadItems(); // reload inventory
+    }catch(err){
+        alert(err.detail || "Error selling item."); // show backend error
+    }
+}
+
+
+async function deleteItem(id){
+  if(!confirm("Are you sure to delete?")) return;
+  const res=await fetch(`${API_URL}/items/${id}`, {method:"DELETE"});
+  const result=await res.json(); if(res.status>=400) alert(result.detail||"Error deleting item.");
+  loadItems();
+}
+
+async function searchItems(){
+  const query=document.getElementById("search").value.trim();
+  if(!query) return loadItems();
+  const res=await fetch(`${API_URL}/items/search?query=${query}`);
+  const data=await res.json();
+  displayItems(data);
+}
+
+function sortTable(colIndex){
+  const table=document.getElementById("inventory-table");
+  let rows=Array.from(table.rows).slice(1);
+  const asc=table.asc=!table.asc;
+  rows.sort((a,b)=>{
+    const aVal=a.cells[colIndex].innerText.replace(/[^\d.-]/g,'');
+    const bVal=b.cells[colIndex].innerText.replace(/[^\d.-]/g,'');
+    return isNaN(aVal)?aVal.localeCompare(bVal):asc?aVal-bVal:bVal-aVal;
+  });
+  rows.forEach(r=>table.appendChild(r));
+}
+
+function resetForm(){
+  idEl.value=""; nameEl.value=""; quantityEl.value=""; priceEl.value="";
+  document.getElementById("form-title").innerText="Add Item";
+  document.getElementById("form-error").textContent="";
+  document.getElementById("add-btn").style.display="inline";
+  document.getElementById("update-btn").style.display="none";
+}
+
+// Dashboard Cards
+async function loadAnalysis(){
+  const res=await fetch(`${API_URL}/items/analysis`);
+  const data=await res.json();
+  document.getElementById("total-items").innerText=data.total_items;
+  document.getElementById("total-investment").innerText="$"+data.total_investment;
+  document.getElementById("low-stock-count").innerText=data.low_stock_count;
+}
+
+
+loadItems();
+</script>
+</body>
+</html>
